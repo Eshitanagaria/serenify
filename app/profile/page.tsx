@@ -1,11 +1,12 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { AppLayout } from "@/components/app-layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Edit2, Save, X, Award, TrendingUp, Zap } from "lucide-react"
+import { Edit2, Save, X, Award, TrendingUp, Zap, LogOut } from "lucide-react"
 
 interface UserProfile {
   name: string
@@ -16,6 +17,7 @@ interface UserProfile {
 }
 
 export default function ProfilePage() {
+  const router = useRouter()
   const [profile, setProfile] = useState<UserProfile>({
     name: "Sarah Mitchell",
     email: "sarah.mitchell@example.com",
@@ -38,6 +40,10 @@ export default function ProfilePage() {
   const handleCancel = () => {
     setEditedProfile(profile)
     setIsEditing(false)
+  }
+
+  const handleSignOut = () => {
+    router.push("/login")
   }
 
   const achievements = [
@@ -261,9 +267,11 @@ export default function ProfilePage() {
 
             <div className="pt-4 border-t border-border/50">
               <Button
+                onClick={handleSignOut}
                 variant="outline"
                 className="border-destructive/50 text-destructive hover:bg-destructive/10 w-full bg-transparent"
               >
+                <LogOut className="w-4 h-4 mr-2" />
                 Sign Out
               </Button>
             </div>
