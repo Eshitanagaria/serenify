@@ -1,22 +1,99 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { AppLayout } from "@/components/app-layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Check, Plus } from "lucide-react"
+import { Check, Plus, Loader2 } from "lucide-react"
+import { createClient } from "@/lib/supabase/client"
+import { useRouter } from "next/navigation"
 
 export default function TrackerPage() {
   const [selectedMood, setSelectedMood] = useState<number | null>(null)
+  const [energyLevel, setEnergyLevel] = useState<number | null>(null)
+  const [sleepHours, setSleepHours] = useState<number>(8)
   const [notes, setNotes] = useState("")
   const [saved, setSaved] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [recentCheckins, setRecentCheckins] = useState<any[]>([])
+  const router = useRouter()
+  const supabase = createClient()
 
-  const handleSave = () => {
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+  const fetchRecentCheckins = async () => {
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser()
+      
+      if (userError || !user) {
+        console.error('User not authenticated')
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('moods')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(3)
+      
+      if (error) throw error
+      setRecentCheckins(data)
+    } catch (err: any) {
+      console.error('Error fetching recent check-ins:', err.message)
+    }
   }
 
-  const moodEmojis = ["😢", "😟", "😐", "🙂", "😊", "😄", "🤩", "😍", "🥳", "🚀"]
+  useEffect(() => {
+    fetchRecentCheckins()
+  }, [])
+
+  const handleSave = async () => {
+    if (!selectedMood) {
+      setError("Please select a mood")
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+
+    try {
+      // Get the current user
+      const { data: { user }, error: userError } = await supabase.auth.getUser()
+      
+      if (userError || !user) {
+        throw new Error("Please login to save your mood")
+      }
+
+      const { error } = await supabase.from('moods').insert({
+        user_id: user.id,
+        mood_score: selectedMood,
+        energy_level: energyLevel || 3, // Default to medium if not selected
+        sleep_hours: sleepHours,
+        notes: notes
+      })
+
+      if (error) throw error
+
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+      
+      // Reset form
+      setSelectedMood(null)
+      setEnergyLevel(null)
+      setSleepHours(8)
+      setNotes("")
+      
+      // Refresh recent check-ins
+      fetchRecentCheckins()
+      router.refresh()
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const moodEmojis = ["😢", "😟", "😐", "🙂", "😊"]  // Reduced to 5 levels to match database schema
 
   return (
     <AppLayout>
@@ -36,12 +113,12 @@ export default function TrackerPage() {
             {/* Emoji Mood Scale */}
             <div className="space-y-3">
               <p className="text-sm font-medium text-foreground">Select your mood:</p>
-              <div className="grid grid-cols-10 gap-2">
+              <div className="grid grid-cols-5 gap-4">
                 {moodEmojis.map((emoji, index) => (
                   <button
                     key={index}
                     onClick={() => setSelectedMood(index + 1)}
-                    className={`aspect-square rounded-lg flex items-center justify-center text-2xl transition-all ${
+                    className={`aspect-square rounded-lg flex items-center justify-center text-3xl transition-all ${
                       selectedMood === index + 1 ? "bg-accent scale-110 shadow-lg" : "bg-muted hover:bg-muted/80"
                     }`}
                   >
@@ -49,7 +126,8 @@ export default function TrackerPage() {
                   </button>
                 ))}
               </div>
-              {selectedMood && <p className="text-sm text-accent font-medium">You selected: {selectedMood}/10</p>}
+              {selectedMood && <p className="text-sm text-accent font-medium">You selected: {selectedMood}/5</p>}
+              {error && <p className="text-sm text-red-500 font-medium">{error}</p>}
             </div>
 
             {/* Numerical Scale */}
@@ -76,22 +154,41 @@ export default function TrackerPage() {
             <div className="space-y-3">
               <label className="text-sm font-medium text-foreground">Energy Level:</label>
               <div className="flex gap-3">
-                {["Low", "Medium", "High"].map((level) => (
+                {[
+                  { level: 1, label: "Very Low" },
+                  { level: 2, label: "Low" },
+                  { level: 3, label: "Medium" },
+                  { level: 4, label: "High" },
+                  { level: 5, label: "Very High" }
+                ].map(({ level, label }) => (
                   <button
                     key={level}
-                    className="px-4 py-2 rounded-lg bg-muted hover:bg-accent hover:text-accent-foreground transition-colors text-foreground"
+                    onClick={() => setEnergyLevel(level)}
+                    className={`px-4 py-2 rounded-lg transition-colors ${
+                      energyLevel === level
+                        ? "bg-accent text-accent-foreground"
+                        : "bg-muted hover:bg-accent hover:text-accent-foreground text-foreground"
+                    }`}
                   >
-                    {level}
+                    {label}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Sleep Quality */}
+            {/* Sleep Hours */}
             <div className="space-y-3">
               <label className="text-sm font-medium text-foreground">Last Night's Sleep:</label>
-              <input type="range" min="0" max="12" className="w-full" />
-              <p className="text-xs text-foreground/60">Rate your sleep quality (0-12 hours)</p>
+              <input
+                type="range"
+                min="0"
+                max="12"
+                step="0.5"
+                value={sleepHours}
+                onChange={(e) => setSleepHours(parseFloat(e.target.value))}
+                className="w-full"
+              />
+              <p className="text-xs text-foreground/60">{sleepHours} hours of sleep</p>
             </div>
 
             {/* Notes */}
@@ -109,11 +206,17 @@ export default function TrackerPage() {
             {/* Save Button */}
             <Button
               onClick={handleSave}
+              disabled={loading || saved}
               className={`w-full transition-all ${
                 saved ? "bg-green-600 hover:bg-green-600" : "bg-accent hover:bg-accent/90"
               } text-accent-foreground`}
             >
-              {saved ? (
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : saved ? (
                 <>
                   <Check className="w-4 h-4 mr-2" />
                   Check-in Saved!
@@ -151,25 +254,45 @@ export default function TrackerPage() {
             <CardTitle className="text-lg">Recent Check-ins</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {[
-              { date: "Today", mood: 8, energy: "High", sleep: "7.5 hrs" },
-              { date: "Yesterday", mood: 7, energy: "Medium", sleep: "6 hrs" },
-              { date: "2 days ago", mood: 6, energy: "Low", sleep: "5 hrs" },
-            ].map((checkin, index) => (
-              <div key={index} className="p-3 bg-muted/50 rounded-lg flex items-center justify-between">
-                <div>
-                  <p className="text-foreground font-medium">{checkin.date}</p>
-                  <p className="text-xs text-foreground/60 space-x-2">
-                    <span>Mood: {checkin.mood}/10</span>
-                    <span>•</span>
-                    <span>Energy: {checkin.energy}</span>
-                    <span>•</span>
-                    <span>Sleep: {checkin.sleep}</span>
-                  </p>
+            {recentCheckins.map((checkin) => {
+              const date = new Date(checkin.created_at)
+              const today = new Date()
+              const yesterday = new Date(today)
+              yesterday.setDate(yesterday.getDate() - 1)
+              
+              let dateLabel
+              if (date.toDateString() === today.toDateString()) {
+                dateLabel = "Today"
+              } else if (date.toDateString() === yesterday.toDateString()) {
+                dateLabel = "Yesterday"
+              } else {
+                dateLabel = date.toLocaleDateString()
+              }
+
+              const energyLabels = ["Very Low", "Low", "Medium", "High", "Very High"]
+              
+              return (
+                <div key={checkin.id} className="p-3 bg-muted/50 rounded-lg flex items-center justify-between">
+                  <div>
+                    <p className="text-foreground font-medium">{dateLabel}</p>
+                    <p className="text-xs text-foreground/60 space-x-2">
+                      <span>Mood: {checkin.mood_score}/5</span>
+                      <span>•</span>
+                      <span>Energy: {energyLabels[checkin.energy_level - 1]}</span>
+                      <span>•</span>
+                      <span>Sleep: {checkin.sleep_hours}hrs</span>
+                    </p>
+                    {checkin.notes && (
+                      <p className="text-xs text-foreground/60 mt-1 italic">{checkin.notes}</p>
+                    )}
+                  </div>
+                  <span className="text-2xl">{moodEmojis[checkin.mood_score - 1]}</span>
                 </div>
-                <span className="text-2xl">{moodEmojis[checkin.mood - 1]}</span>
-              </div>
-            ))}
+              )
+            })}
+            {recentCheckins.length === 0 && (
+              <p className="text-sm text-foreground/60 text-center py-4">No recent check-ins</p>
+            )}
           </CardContent>
         </Card>
       </div>
