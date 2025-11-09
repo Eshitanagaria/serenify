@@ -20,22 +20,22 @@ import { TrendingUp, Calendar, Award } from "lucide-react"
 import { useSupabaseClient } from "@/lib/supabase/use-supabase"
 import { useRouter } from "next/navigation"
 
-const moodData = [
-  { day: "Mon", mood: 7, sleep: 6.5 },
-  { day: "Tue", mood: 6, sleep: 7 },
-  { day: "Wed", mood: 8, sleep: 7.5 },
-  { day: "Thu", mood: 7, sleep: 6 },
-  { day: "Fri", mood: 9, sleep: 8 },
-  { day: "Sat", mood: 8, sleep: 8.5 },
-  { day: "Sun", mood: 7.5, sleep: 7.5 },
+// We'll replace this with dynamic data from the database
+const emptyMoodData = [
+  { day: "Mon", mood: 0, sleep: 0 },
+  { day: "Tue", mood: 0, sleep: 0 },
+  { day: "Wed", mood: 0, sleep: 0 },
+  { day: "Thu", mood: 0, sleep: 0 },
+  { day: "Fri", mood: 0, sleep: 0 },
+  { day: "Sat", mood: 0, sleep: 0 },
+  { day: "Sun", mood: 0, sleep: 0 },
 ]
 
-const habitData = [
-  { name: "Meditation", value: 80 },
-  { name: "Exercise", value: 65 },
-  { name: "Journaling", value: 90 },
-  { name: "Reading", value: 45 },
-]
+interface HabitCompletionData {
+  name: string;
+  value: number;
+  category: string;
+}
 
 const colors = ["#9ec5ab", "#32746d", "#104f55", "#7ab89f"]
 
@@ -54,11 +54,126 @@ const quotes = [
   "Healing doesn't mean the damage never existed. It means the damage no longer controls our lives.",
 ]
 
+interface MoodData {
+  day: string;
+  mood: number;
+  sleep: number;
+}
+
+interface WeeklyStats {
+  avgMood: number;
+  avgSleep: number;
+}
+
 export default function DashboardPage() {
   const [user, setUser] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [moodData, setMoodData] = useState<MoodData[]>(emptyMoodData)
+  const [weeklyStats, setWeeklyStats] = useState<WeeklyStats>({ avgMood: 0, avgSleep: 0 })
+  const [habitData, setHabitData] = useState<HabitCompletionData[]>([])
+  const [totalHabitsCompleted, setTotalHabitsCompleted] = useState(0)
   const router = useRouter()
   const supabase = useSupabaseClient()
+
+  const getStartOfWeek = () => {
+    const startOfWeek = new Date()
+    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay()) // Get Sunday
+    startOfWeek.setHours(0, 0, 0, 0)
+    return startOfWeek
+  }
+
+  const fetchHabitData = async () => {
+    try {
+      const startOfWeek = getStartOfWeek()
+      
+      // First, get all habits
+      const { data: habits, error: habitsError } = await supabase
+        .from('habits')
+        .select('id, name, category')
+        .eq('user_id', user?.id)
+
+      if (habitsError) throw habitsError
+
+      if (!habits) return
+
+      // Then, get completions for this week
+      const { data: completions, error: completionsError } = await supabase
+        .from('habit_completions')
+        .select('habit_id, completed_date')
+        .eq('user_id', user?.id)
+        .gte('completed_date', startOfWeek.toISOString().split('T')[0])
+
+      if (completionsError) throw completionsError
+
+      // Calculate completion rates
+      const completionData = habits.map((habit: { id: any; name: any; category: any }) => {
+        const habitCompletions = completions?.filter((c: { habit_id: any }) => c.habit_id === habit.id) || []
+        const completionRate = Math.round((habitCompletions.length / 7) * 100)
+        
+        return {
+          name: habit.name,
+          value: completionRate,
+          category: habit.category
+        }
+      })
+
+      setHabitData(completionData)
+      setTotalHabitsCompleted(completions?.length || 0)
+    } catch (err) {
+      console.error('Error fetching habit data:', err)
+    }
+  }
+
+  const fetchMoodData = async () => {
+    try {
+      const startOfWeek = getStartOfWeek()
+
+      const { data, error } = await supabase
+        .from('moods')
+        .select('*')
+        .gte('created_at', startOfWeek.toISOString())
+        .order('created_at', { ascending: true })
+
+      if (error) throw error
+
+      // Process the data into daily format
+      const processedData = [...emptyMoodData]
+      let totalMood = 0
+      let totalSleep = 0
+      let entriesCount = 0
+
+      if (data) {
+        data.forEach((entry: { created_at: string | number | Date; mood_score: number; sleep_hours: any }) => {
+          const date = new Date(entry.created_at)
+          const dayIndex = date.getDay()
+          const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dayIndex]
+          
+          // Scale mood_score from 1-5 to 1-10 for visualization
+          const scaledMood = (entry.mood_score * 2)
+          
+          processedData[dayIndex] = {
+            day: dayName,
+            mood: scaledMood,
+            sleep: entry.sleep_hours || 0
+          }
+
+          totalMood += scaledMood
+          totalSleep += entry.sleep_hours || 0
+          entriesCount++
+        })
+
+        // Calculate averages
+        setWeeklyStats({
+          avgMood: entriesCount ? +(totalMood / entriesCount).toFixed(1) : 0,
+          avgSleep: entriesCount ? +(totalSleep / entriesCount).toFixed(1) : 0
+        })
+      }
+
+      setMoodData(processedData)
+    } catch (err) {
+      console.error('Error fetching mood data:', err)
+    }
+  }
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -73,6 +188,11 @@ export default function DashboardPage() {
         }
 
         setUser(currentUser)
+        // Fetch both mood and habit data after authentication
+        await Promise.all([
+          fetchMoodData(),
+          fetchHabitData()
+        ])
       } catch (error) {
         console.error("[v0] Auth check error:", error)
         router.push("/login")
@@ -83,6 +203,35 @@ export default function DashboardPage() {
 
     checkAuth()
   }, [supabase, router])
+
+  // Refresh data when changes are made in the tracker or habits
+  useEffect(() => {
+    const moodsSubscription = supabase
+      .channel('dashboard-changes')
+      .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'moods' },
+        () => {
+          fetchMoodData()
+        }
+      )
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'habit_completions' },
+        () => {
+          fetchHabitData()
+        }
+      )
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'habits' },
+        () => {
+          fetchHabitData()
+        }
+      )
+      .subscribe()
+
+    return () => {
+      moodsSubscription.unsubscribe()
+    }
+  }, [user?.id])
 
   const randomQuote = quotes[Math.floor(Math.random() * quotes.length)]
 
@@ -130,7 +279,7 @@ export default function DashboardPage() {
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-foreground/70 text-sm font-medium">Weekly Avg Mood</p>
-                  <p className="text-3xl font-bold text-accent mt-2">7.6</p>
+                  <p className="text-3xl font-bold text-accent mt-2">{weeklyStats.avgMood}</p>
                   <p className="text-xs text-foreground/60 mt-1">out of 10</p>
                 </div>
                 <TrendingUp className="w-8 h-8 text-accent/50" />
@@ -143,7 +292,7 @@ export default function DashboardPage() {
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-foreground/70 text-sm font-medium">Habits Completed</p>
-                  <p className="text-3xl font-bold text-accent mt-2">18</p>
+                  <p className="text-3xl font-bold text-accent mt-2">{totalHabitsCompleted}</p>
                   <p className="text-xs text-foreground/60 mt-1">this week</p>
                 </div>
                 <Calendar className="w-8 h-8 text-accent/50" />
@@ -156,7 +305,7 @@ export default function DashboardPage() {
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-foreground/70 text-sm font-medium">Avg Sleep</p>
-                  <p className="text-3xl font-bold text-accent mt-2">7.4</p>
+                  <p className="text-3xl font-bold text-accent mt-2">{weeklyStats.avgSleep}</p>
                   <p className="text-xs text-foreground/60 mt-1">hours per night</p>
                 </div>
                 <div className="w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center">
@@ -208,7 +357,7 @@ export default function DashboardPage() {
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie
-                    data={habitData}
+                    data={habitData as any[]}
                     cx="50%"
                     cy="50%"
                     labelLine={false}
