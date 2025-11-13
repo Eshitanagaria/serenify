@@ -1,17 +1,20 @@
 "use client"
 
+
 import { useEffect, useState } from "react"
 import { AppLayout } from "@/components/app-layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Check, Plus, Loader2, Bot } from "lucide-react"
+import { Check, Plus, Bot, Loader2 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
 
-
 export default function TrackerPage() {
   const supabase = createClient()
+  const router = useRouter()
+
   const [selectedMood, setSelectedMood] = useState<number | null>(null)
+  
   const [energyLevel, setEnergyLevel] = useState<number | null>(null)
   const [sleepHours, setSleepHours] = useState<number>(8)
   const [notes, setNotes] = useState("")
@@ -19,7 +22,8 @@ export default function TrackerPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [recentCheckins, setRecentCheckins] = useState<any[]>([])
-  const router = useRouter()
+  const [aiInsight, setAiInsight] = useState<string>("")
+  const [loadingInsight, setLoadingInsight] = useState(false)
 
   const fetchRecentCheckins = async () => {
     try {
@@ -38,63 +42,97 @@ export default function TrackerPage() {
         .limit(3)
       
       if (error) throw error
-      setRecentCheckins(data)
+      setRecentCheckins(data || [])
     } catch (err: any) {
       console.error('Error fetching recent check-ins:', err.message)
     }
   }
 
-  useEffect(() => {
-    fetchRecentCheckins()
-  }, [])
-
-  const handleSave = async () => {
-    if (!selectedMood) {
-      setError("Please select a mood")
-      return
-    }
-
-    setLoading(true)
-    setError(null)
-
+  const fetchAIInsights = async () => {
+    setLoadingInsight(true)
     try {
-      // Get the current user
-      const { data: { user }, error: userError } = await supabase.auth.getUser()
-      
-      if (userError || !user) {
-        throw new Error("Please login to save your mood")
-      }
-
-      const { error } = await supabase.from('moods').insert({
-        user_id: user.id,
-        mood_score: selectedMood,
-        energy_level: energyLevel || 3, // Default to medium if not selected
-        sleep_hours: sleepHours,
-        notes: notes
+      const response = await fetch('/api/ai-insight', {
+        method: 'POST',
       })
-
-      if (error) throw error
-
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-      
-      // Reset form
-      setSelectedMood(null)
-      setEnergyLevel(null)
-      setSleepHours(8)
-      setNotes("")
-      
-      // Refresh recent check-ins
-      fetchRecentCheckins()
-      router.refresh()
-    } catch (err: any) {
-      setError(err.message)
+      const data = await response.json()
+      setAiInsight(data.suggestion)
+    } catch (err) {
+      console.error('Error fetching AI insights:', err)
+      setAiInsight("Unable to generate insights at the moment.")
     } finally {
-      setLoading(false)
+      setLoadingInsight(false)
     }
   }
 
-  const moodEmojis = ["😢", "😟", "😐", "🙂", "😊"]  // Reduced to 5 levels to match database schema
+  useEffect(() => {
+    fetchRecentCheckins()
+    fetchAIInsights()
+  }, [])
+
+  const handleSave = async () => {
+  if (!selectedMood) {
+    setError("Please select a mood")
+    return
+  }
+
+  setLoading(true)
+  setError(null)
+
+  try {
+    // Get the current user
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    
+    console.log("Current user:", user)
+    console.log("User error:", userError)
+    
+    if (userError || !user) {
+      throw new Error("Please login to save your mood")
+    }
+
+    const insertData = {
+      user_id: user.id,
+      mood_score: selectedMood,
+      energy_level: energyLevel || 3,
+      sleep_hours: sleepHours,
+      notes: notes || null
+    }
+
+    console.log("Inserting data:", insertData)
+
+    const { data, error } = await supabase.from('moods').insert(insertData).select()
+
+    if (error) {
+      console.error("Full error details:", error)
+      console.error("Error message:", error.message)
+      console.error("Error code:", error.code)
+      throw error
+    }
+
+    console.log("Insert successful:", data)
+
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+    
+    // Reset form
+    setSelectedMood(null)
+    setEnergyLevel(null)
+    setSleepHours(8)
+    setNotes("")
+    
+    // Refresh recent check-ins and AI insights
+    fetchRecentCheckins()
+    fetchAIInsights()
+    router.refresh()
+  } catch (err: any) {
+    console.error("Error saving check-in:", err)
+    setError(err.message)
+    alert(`Error: ${err.message}`)
+  } finally {
+    setLoading(false)
+  }
+}
+
+const moodEmojis = ["😢", "😟", "😐", "🙂", "😊"]  
 
   return (
     <AppLayout>
@@ -114,7 +152,7 @@ export default function TrackerPage() {
             {/* Emoji Mood Scale */}
             <div className="space-y-3">
               <p className="text-sm font-medium text-foreground">Select your mood:</p>
-              <div className="grid grid-cols-5 gap-4">
+              <div className="grid grid-cols-5 gap-4">  
                 {moodEmojis.map((emoji, index) => (
                   <button
                     key={index}
@@ -133,9 +171,9 @@ export default function TrackerPage() {
 
             {/* Numerical Scale */}
             <div className="space-y-3">
-              <p className="text-sm font-medium text-foreground">Or rate numerically:</p>
+              <p className="text-sm font-medium text-foreground">Or rate numerically (1-5):</p>
               <div className="flex gap-2 flex-wrap">
-                {Array.from({ length: 10 }).map((_, i) => (
+                {Array.from({ length: 5 }).map((_, i) => (
                   <button
                     key={i + 1}
                     onClick={() => setSelectedMood(i + 1)}
@@ -251,11 +289,53 @@ export default function TrackerPage() {
         </Card>
 
         {/* AI Wellness Insights */}
-        <Card className="bg-card/50 border-border/50">
+        <Card className="bg-gradient-to-br from-accent/10 to-accent/5 border-accent/30">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
-              <Bot className="w-5 h-5 text-accent" /> Weekly AI Insights
+              <Bot className="w-5 h-5 text-accent" /> AI Wellness Insights
             </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {loadingInsight ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-6 h-6 animate-spin text-accent" />
+                <span className="ml-2 text-foreground/70">Analyzing your wellness data...</span>
+              </div>
+            ) : aiInsight ? (
+              <div className="p-4 bg-card/50 rounded-lg border border-accent/20">
+                <p className="text-foreground leading-relaxed whitespace-pre-line">{aiInsight}</p>
+              </div>
+            ) : (
+              <p className="text-sm text-foreground/60 text-center py-4">
+                Complete a few check-ins to get personalized insights
+              </p>
+            )}
+            
+            <Button
+              onClick={fetchAIInsights}
+              variant="outline"
+              className="w-full border-accent/30 hover:bg-accent/10"
+              disabled={loadingInsight}
+            >
+              {loadingInsight ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Analyzing...
+                </>
+              ) : (
+                <>
+                  <Bot className="w-4 h-4 mr-2" />
+                  Refresh Insights
+                </>
+              )}
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* Recent Check-ins History */}
+        <Card className="bg-card/50 border-border/50">
+          <CardHeader>
+            <CardTitle className="text-lg">Recent Check-ins</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {recentCheckins.map((checkin) => {
@@ -290,7 +370,7 @@ export default function TrackerPage() {
                       <p className="text-xs text-foreground/60 mt-1 italic">{checkin.notes}</p>
                     )}
                   </div>
-                  <span className="text-2xl">{moodEmojis[checkin.mood_score - 1]}</span>
+                  <span className="text-2xl">{moodEmojis[Math.min(checkin.mood_score - 1, 4)]}</span>
                 </div>
               )
             })}
